@@ -38,6 +38,7 @@ class BagelConfig(PretrainedConfig):
         connector_act="gelu_pytorch_tanh",
         interpolate_pos=False,
         timestep_shift=1.0,
+        code_expert="und",
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -52,6 +53,7 @@ class BagelConfig(PretrainedConfig):
         self.connector_act = connector_act
         self.interpolate_pos = interpolate_pos
         self.timestep_shift = timestep_shift
+        self.code_expert = code_expert
 
 
 class Bagel(PreTrainedModel):
@@ -122,6 +124,7 @@ class Bagel(PreTrainedModel):
         packed_vae_token_indexes: Optional[torch.LongTensor] = None,
         packed_timesteps: Optional[torch.LongTensor] = None,
         mse_loss_indexes: Optional[torch.BoolTensor] = None,
+        packed_code_token_indexes: Optional[torch.LongTensor] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -200,10 +203,26 @@ class Bagel(PreTrainedModel):
         if self.use_moe:
             packed_und_token_indexes = packed_text_indexes
             if packed_vit_token_indexes is not None:
-                packed_und_token_indexes=torch.cat([packed_text_indexes, packed_vit_token_indexes], dim=0)
+                packed_und_token_indexes = torch.cat(
+                    [packed_text_indexes, packed_vit_token_indexes], dim=0)
+
+            gen_token_indexes = packed_vae_token_indexes
+
+            # Ablation A2: route code tokens through generation expert instead of understanding.
+            # When code_expert="gen", remove code positions from und and add to gen.
+            if (packed_code_token_indexes is not None
+                    and self.config.code_expert == "gen"
+                    and len(packed_code_token_indexes) > 0):
+                is_code = torch.isin(packed_und_token_indexes, packed_code_token_indexes)
+                packed_und_token_indexes = packed_und_token_indexes[~is_code]
+                gen_token_indexes = (
+                    torch.cat([packed_code_token_indexes, gen_token_indexes], dim=0)
+                    if gen_token_indexes is not None else packed_code_token_indexes
+                )
+
             extra_inputs.update(
                 packed_und_token_indexes=packed_und_token_indexes,
-                packed_gen_token_indexes=packed_vae_token_indexes,
+                packed_gen_token_indexes=gen_token_indexes,
             )
 
         last_hidden_state = self.language_model(

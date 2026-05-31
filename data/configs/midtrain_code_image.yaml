@@ -1,0 +1,27 @@
+# Mid-training config: (code, rendered image) sequences
+# Usage: torchrun train/pretrain_unified_navit.py \
+#            --dataset_config_file data/configs/midtrain_code_image.yaml \
+#            [--mask_image_loss]          # text-only-code baseline (H1/H3)
+#            [--code_expert gen]          # ablation A2: code routes to gen expert
+
+code_image:
+  dataset_names:
+    - tikz
+    - tikz_trace
+    - tikz_promptfree
+  image_transform_args:        # VAE generation: high-res, stride=16
+    image_stride: 16
+    max_image_size: 1024
+    min_image_size: 512
+  vit_image_transform_args:    # ViT understanding: lower-res, stride=14
+    image_stride: 14
+    max_image_size: 980
+    min_image_size: 224
+  is_mandatory: true
+  direction: mixed             # 50/50 code->image and image->code for prompt_free
+  max_trace_steps: 8
+  num_used_data:
+    - 7421    # tikz full
+    - 1557    # tikz trace
+    - 974     # tikz prompt_free
+  weight: 1.0

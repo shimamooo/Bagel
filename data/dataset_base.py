@@ -171,7 +171,8 @@ class PackedDataset(torch.utils.data.IterableDataset):
             packed_label_ids            = list(),
             ce_loss_indexes             = list(),
             ce_loss_weights             = list(),
-            vae_image_tensors           = list(), 
+            packed_code_token_indexes   = list(),
+            vae_image_tensors           = list(),
             packed_latent_position_ids  = list(),
             vae_latent_shapes           = list(), 
             packed_vae_token_indexes    = list(), 
@@ -226,6 +227,11 @@ class PackedDataset(torch.utils.data.IterableDataset):
         if len(sequence_status['packed_timesteps']) > 0:
             data['packed_timesteps'] = torch.tensor(sequence_status['packed_timesteps'])
             data['mse_loss_indexes'] = torch.tensor(sequence_status['mse_loss_indexes'])
+
+        # code token positions for ablation A2 (code expert routing)
+        if len(sequence_status['packed_code_token_indexes']) > 0:
+            data['packed_code_token_indexes'] = torch.tensor(
+                sequence_status['packed_code_token_indexes'])
 
         # if the model is required to perform text generation
         if len(sequence_status['packed_label_ids']) > 0:
@@ -326,6 +332,10 @@ class PackedDataset(torch.utils.data.IterableDataset):
                 shifted_text_ids = [self.bos_token_id] + text_ids
                 sequence_status['packed_text_ids'].extend(shifted_text_ids)
                 sequence_status['packed_text_indexes'].extend(range(curr, curr + len(shifted_text_ids)))
+                if item.get('is_code', False):
+                    # track code token positions for ablation A2 (code expert routing)
+                    sequence_status['packed_code_token_indexes'].extend(
+                        range(curr, curr + len(shifted_text_ids) + 1))  # +1 for eos
                 if item['loss'] == 1:
                     sequence_status['ce_loss_indexes'].extend(range(curr, curr + len(shifted_text_ids)))
                     sequence_status['ce_loss_weights'].extend(
@@ -505,6 +515,9 @@ class SimpleCustomBatch:
             self.packed_vit_token_indexes = data["packed_vit_token_indexes"]
             self.vit_token_seqlens = data["vit_token_seqlens"]
 
+        if "packed_code_token_indexes" in data.keys():
+            self.packed_code_token_indexes = data["packed_code_token_indexes"]
+
         if "packed_timesteps" in data.keys():
             self.packed_timesteps = data["packed_timesteps"]
             self.mse_loss_indexes = data["mse_loss_indexes"]
@@ -526,6 +539,9 @@ class SimpleCustomBatch:
             self.padded_images = self.padded_images.pin_memory()
             self.packed_vae_token_indexes = self.packed_vae_token_indexes.pin_memory()
             self.packed_latent_position_ids = self.packed_latent_position_ids.pin_memory()
+
+        if hasattr(self, 'packed_code_token_indexes'):
+            self.packed_code_token_indexes = self.packed_code_token_indexes.pin_memory()
 
         if hasattr(self, 'packed_timesteps'):
             self.packed_timesteps = self.packed_timesteps.pin_memory()
@@ -556,6 +572,9 @@ class SimpleCustomBatch:
             self.padded_images = self.padded_images.to(device)
             self.packed_vae_token_indexes = self.packed_vae_token_indexes.to(device)
             self.packed_latent_position_ids = self.packed_latent_position_ids.to(device)
+
+        if hasattr(self, 'packed_code_token_indexes'):
+            self.packed_code_token_indexes = self.packed_code_token_indexes.to(device)
 
         if hasattr(self, 'packed_timesteps'):
             self.packed_timesteps = self.packed_timesteps.to(device)
@@ -601,6 +620,9 @@ class SimpleCustomBatch:
             data['packed_vit_position_ids'] = self.packed_vit_position_ids
             data['packed_vit_token_indexes'] = self.packed_vit_token_indexes
             data['vit_token_seqlens'] = self.vit_token_seqlens
+
+        if hasattr(self, 'packed_code_token_indexes'):
+            data['packed_code_token_indexes'] = self.packed_code_token_indexes
 
         if hasattr(self, 'packed_timesteps'):
             data['packed_timesteps'] = self.packed_timesteps

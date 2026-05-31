@@ -117,6 +117,11 @@ class ModelArguments:
         default="Qwen2MoTDecoderLayer",
         metadata={"help": "Python class name of the decoder layer to instantiate."}
     )
+    code_expert: str = field(
+        default="und",
+        metadata={"help": "'und' routes code tokens through the understanding expert (default). "
+                  "'gen' routes code tokens through the generation expert (ablation A2)."}
+    )
     vae_path: str = field(
         default="flux/vae/ae.safetensors",
         metadata={"help": "Path to the pretrained VAE checkpoint for latent-space image generation."}
@@ -343,6 +348,12 @@ class TrainingArguments:
         default=False,
         metadata={"help": "Reweight CE loss by token importance (provided via ce_loss_weights)."}
     )
+    mask_image_loss: bool = field(
+        default=False,
+        metadata={"help": "Zero the rectified-flow MSE loss. "
+                  "Implements the text-only-code baseline (H1/H3): the model sees "
+                  "images in context but receives no supervision on generating them."}
+    )
     expected_num_tokens: int = field(
         default=32768,
         metadata={"help": "Soft target token count; yield the batch once it reaches or exceeds this size."}
@@ -515,6 +526,7 @@ def main():
         connector_act=model_args.connector_act,
         interpolate_pos=model_args.interpolate_pos,
         timestep_shift=training_args.timestep_shift,
+        code_expert=model_args.code_expert,
     )
     model = Bagel(
         language_model, 
@@ -717,7 +729,10 @@ def main():
             dist.all_reduce(total_mse_tokens, op=dist.ReduceOp.SUM)
             mse = mse.mean(dim=-1).sum() * dist.get_world_size() / total_mse_tokens
             loss_dict["mse"] = mse.detach()
-            loss = loss + mse * training_args.mse_weight
+            if not training_args.mask_image_loss:
+                loss = loss + mse * training_args.mse_weight
+            # when mask_image_loss=True: model sees images in context but gets no
+            # generation supervision -- this is the text-only-code baseline
         else:
             assert not training_args.visual_gen
             loss_dict["mse"] = torch.tensor(0, device=device)
