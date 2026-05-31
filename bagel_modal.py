@@ -1,30 +1,11 @@
-# Copyright 2025 — BAGEL on Modal
-# Run the BAGEL Gradio web app on a cloud GPU using Modal.
-#
-# ── Setup (one time) ──────────────────────────────────────────────────────
-#   uv add modal                         # install Modal SDK
-#   uv run modal setup                   # authenticate (opens browser)
-#   uv run modal run bagel_modal.py::download_weights   # pull ~28 GB model
-#
-# ── Serve the Gradio UI ───────────────────────────────────────────────────
-#   uv run modal serve bagel_modal.py    # live dev mode — hot-reload on save
-#   uv run modal deploy bagel_modal.py   # permanent deployment
-#
-# ── GPU / quantization options ────────────────────────────────────────────
-#   MODE 2  (NF4 quant)  → A10G 24 GB  ~$0.19 /hr  ← default, cheapest
-#   MODE 1  (bfloat16)   → A100 40 GB  ~$1.20 /hr  (change GPU + MODE below)
-#   MODE 3  (INT8 quant) → A100 40 GB  ~$1.20 /hr
-
 import os
 import sys
 import modal
 
-# ── Tunables ──────────────────────────────────────────────────────────────
-GPU        = "A100-40GB"  # A10G (24 GB) causes disk-offload with NF4 → very slow
-MODE       = 1            # 1=bfloat16 (fastest, needs ~30 GB), 2=NF4, 3=INT8
-MAX_MEM_GB = 38           # leave ~2 GB headroom on A100-40GB
+GPU        = "A100-40GB"
+MODE       = 1
+MAX_MEM_GB = 38
 
-# ── Modal primitives ──────────────────────────────────────────────────────
 app = modal.App("bagel")
 
 MODEL_DIR = "/vol/models/BAGEL-7B-MoT"
@@ -32,34 +13,24 @@ REPO_ID   = "ByteDance-Seed/BAGEL-7B-MoT"
 
 model_volume = modal.Volume.from_name("bagel-model-weights", create_if_missing=True)
 
-# ── Container image ───────────────────────────────────────────────────────
-# Layers are cached individually; flash_attn (last layer) is the slow one.
-# add_local_dir (copy=False) lazily syncs project code at runtime — no
-# image rebuild needed when you edit Python files locally.
 bagel_image = (
-    # nvidia/cuda devel image ships with nvcc + CUDA headers so flash-attn
-    # can compile from source.  The *runtime* image lacks the compiler and
-    # that's what caused the previous "CUDA_HOME not set / nvcc not found" error.
     modal.Image.from_registry(
         "nvidia/cuda:12.4.1-devel-ubuntu22.04",
         add_python="3.10",
     )
     .apt_install("libgl1", "libglib2.0-0", "git", "clang")
     .pip_install(
-        # core numeric / vision
         "numpy==1.24.4",
         "scipy==1.10.1",
         "Pillow",
         "opencv-python-headless",
         "decord==0.6.0",
-        # serialisation / IO
         "safetensors==0.4.5",
         "PyYAML==6.0.2",
         "requests",
         "pyarrow==11.0.0",
         "huggingface_hub==0.29.1",
         "sentencepiece==0.1.99",
-        # ML stack — match the CUDA 12.4 toolkit in the base image
         "torch==2.5.1",
         "torchvision==0.20.1",
         "transformers==4.49.0",
@@ -67,20 +38,16 @@ bagel_image = (
         "accelerate>=0.34.0",
         "bitsandbytes",
         "triton",
-        # build tools needed by flash-attn
         "ninja",
         "wheel",
         "setuptools",
         "packaging",
-        # UI / utilities
         "gradio>=4.0",
         "matplotlib==3.7.0",
         "xlsxwriter",
         "wandb",
     )
-    # nvcc is now on PATH from the devel base image — no gpu= flag needed here
     .run_commands("pip install flash-attn==2.5.8 --no-build-isolation")
-    # Mount local project code (lazy: not baked into image, re-synced each run)
     .add_local_dir(
         ".",
         remote_path="/app",
@@ -91,11 +58,10 @@ bagel_image = (
 )
 
 
-# ── One-time model download ───────────────────────────────────────────────
 @app.function(
     image=bagel_image,
     volumes={"/vol": model_volume},
-    timeout=7200,   # 2 h — large model, slow network
+    timeout=7200,
     cpu=8,
 )
 def download_weights():
@@ -124,7 +90,6 @@ def download_weights():
     print("Download complete.")
 
 
-# ── Gradio web app ────────────────────────────────────────────────────────
 @app.cls(
     image=bagel_image,
     gpu=GPU,
@@ -132,7 +97,7 @@ def download_weights():
     timeout=3600,
     max_containers=1,
     scaledown_window=300,
-    startup_timeout=900,   # kill container and report failure if load() exceeds 15 min
+    startup_timeout=900,
     env={"GRADIO_TEMP_DIR": "/tmp/gradio"},
 )
 class BagelApp:
@@ -148,9 +113,6 @@ class BagelApp:
                                 load_checkpoint_and_dispatch,
                                 init_empty_weights)
 
-        # Must be set before `import gradio` so Gradio 5 initialises its
-        # upload cache in a writable directory (default lookup can fail in
-        # containers and causes POST /gradio_api/upload → 500).
         os.makedirs("/tmp/gradio", exist_ok=True)
         os.environ["GRADIO_TEMP_DIR"] = "/tmp/gradio"
 
@@ -163,7 +125,6 @@ class BagelApp:
         def log(msg):
             print(f"[+{time.time()-t0:5.0f}s] {msg}", flush=True)
 
-        # ── project imports ───────────────────────────────────────────
         log("importing BAGEL modules")
         from data.data_utils import add_special_tokens, pil_img2rgb
         from data.transforms import ImageTransform
@@ -175,7 +136,6 @@ class BagelApp:
         from modeling.qwen2 import Qwen2Tokenizer
         from inferencer import InterleaveInferencer
 
-        # ── configs ───────────────────────────────────────────────────
         log("reading model configs")
         llm_config = Qwen2Config.from_json_file(f"{MODEL_DIR}/llm_config.json")
         llm_config.qk_norm = True
@@ -186,12 +146,10 @@ class BagelApp:
         vit_config.rope = False
         vit_config.num_hidden_layers -= 1
 
-        # ── VAE ───────────────────────────────────────────────────────
         log("loading VAE (ae.safetensors)")
         vae_model, vae_config = load_ae(local_path=f"{MODEL_DIR}/ae.safetensors")
         log("VAE loaded")
 
-        # ── empty model skeleton (meta device — no memory yet) ────────
         log("building empty model skeleton")
         config = BagelConfig(
             visual_gen=True, visual_und=True,
@@ -207,12 +165,10 @@ class BagelApp:
                 vit_config, meta=True)
         log("skeleton ready")
 
-        # ── tokenizer ─────────────────────────────────────────────────
         log("loading tokenizer")
         tokenizer = Qwen2Tokenizer.from_pretrained(MODEL_DIR)
         tokenizer, new_token_ids, _ = add_special_tokens(tokenizer)
 
-        # ── device map ────────────────────────────────────────────────
         log(f"computing device map  (capping at {MAX_MEM_GB} GiB per GPU)")
         device_map = infer_auto_device_map(
             model,
@@ -237,11 +193,11 @@ class BagelApp:
         n_disk = sum(1 for v in device_map.values() if v == "disk")
         log(f"device map: {n_gpu} GPU layers | {n_cpu} CPU layers | {n_disk} disk layers")
         if n_cpu or n_disk:
-            log("⚠  offloaded layers detected — inference will be slow. "
+            log("offloaded layers detected - inference will be slow. "
                 "Increase MAX_MEM_GB or use a larger GPU.")
 
         # ── load weights ──────────────────────────────────────────────
-        log("dispatching ema.safetensors → GPU  (typically 2–4 min)")
+        log("dispatching ema.safetensors, GPU  (typically 2-4 min)")
         model = load_checkpoint_and_dispatch(
             model,
             checkpoint=f"{MODEL_DIR}/ema.safetensors",
@@ -252,9 +208,8 @@ class BagelApp:
             force_hooks=True,
         ).eval()
         vram = torch.cuda.memory_allocated() / 1e9
-        log(f"weights loaded ✓  VRAM in use: {vram:.1f} GB / {MAX_MEM_GB} GB")
+        log(f"weights loaded, VRAM in use: {vram:.1f} GB / {MAX_MEM_GB} GB")
 
-        # ── inferencer ────────────────────────────────────────────────
         log("building inferencer")
         inferencer = InterleaveInferencer(
             model=model,
@@ -265,7 +220,6 @@ class BagelApp:
             new_token_ids=new_token_ids,
         )
 
-        # ── tiny helpers ──────────────────────────────────────────────
         def set_seed(seed):
             if seed > 0:
                 random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
@@ -274,7 +228,6 @@ class BagelApp:
         RATIOS = {"1:1":(1024,1024),"4:3":(768,1024),"3:4":(1024,768),
                   "16:9":(576,1024),"9:16":(1024,576)}
 
-        # ── inference closures (capture `inferencer` from local scope) ─
         def text_to_image(prompt, thinking, cfg_text, cfg_interval, ts_shift,
                           n_steps, renorm_min, renorm_type,
                           max_think, do_sample, temp, seed, ratio):
@@ -324,7 +277,6 @@ class BagelApp:
             )
             return result["text"]
 
-        # ── Gradio UI ─────────────────────────────────────────────────
         log("building Gradio UI")
 
         def hyper_row1(cfg_text_default=4.0, cfg_interval_default=0.4):
@@ -340,10 +292,9 @@ class BagelApp:
             return max_think, do_sample, temp
 
         with gr.Blocks(title="BAGEL") as demo:
-            gr.Markdown("# 🥯 BAGEL — Multimodal Understanding & Generation")
+            gr.Markdown("# BAGEL Multimodal Understanding & Generation")
 
-            # ─── Text to Image ────────────────────────────────────────
-            with gr.Tab("📝 Text to Image"):
+            with gr.Tab("Text to Image"):
                 t2i_prompt = gr.Textbox(label="Prompt", lines=3,
                     value="A female cosplayer portraying an ethereal fairy or elf, "
                           "wearing a flowing dress in soft mystical colors like emerald "
@@ -374,7 +325,6 @@ class BagelApp:
                                t2i_max_think, t2i_do_sample, t2i_temp, t2i_seed, t2i_ratio],
                       outputs=[t2i_out, t2i_thought])
 
-            # ─── Image Edit ───────────────────────────────────────────
             with gr.Tab("🖌️ Image Edit"):
                 with gr.Row():
                     with gr.Column():
@@ -410,8 +360,7 @@ class BagelApp:
                                ed_renorm_type, ed_max_think, ed_do_sample, ed_temp, ed_seed],
                       outputs=[ed_img_out, ed_thought])
 
-            # ─── Image Understanding ──────────────────────────────────
-            with gr.Tab("🖼️ Image Understanding"):
+            with gr.Tab("Image Understanding"):
                 with gr.Row():
                     with gr.Column():
                         und_img    = gr.Image(label="Input image")
@@ -432,7 +381,7 @@ class BagelApp:
 
         self._demo = demo
         self._demo.queue()
-        log(f"BAGEL ready ✓  total load time: {time.time()-t0:.0f}s")
+        log(f"BAGEL ready, total load time: {time.time()-t0:.0f}s")
 
     @modal.asgi_app()
     def ui(self):

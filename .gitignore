@@ -10,4 +10,10 @@ tests
 gradio.sh
 data_example
 
-raw
+raw/
+data_collection/raw/
+data_collection/rendered/
+data_collection/deduped/
+data_collection/sequences/
+*.parquet
+*.jsonl

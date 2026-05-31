@@ -2,9 +2,10 @@ import re, json, random
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-DEDUPED = Path("deduped")
-RENDERED = Path("rendered")
-SEQUENCES = Path("sequences")
+HERE = Path(__file__).parent
+DEDUPED = HERE / "deduped"
+RENDERED = HERE / "rendered"
+SEQUENCES = HERE / "sequences"
 
 def _split_tikz(code: str) -> list[str]:
     lines = code.splitlines()
@@ -44,8 +45,6 @@ def _split_svg(code: str) -> list[str]:
         tree = ET.fromstring(code)
     except ET.ParseError:
         return [code]
-    ns_match = re.match(r"\{([^}]+)\}", tree.tag)
-    ns = f"{{{ns_match.group(1)}}}" if ns_match else ""
     svg_tag = re.match(r"<svg[^>]*>", code)
     header = svg_tag.group(0) if svg_tag else "<svg>"
     children = list(tree)
@@ -105,7 +104,7 @@ def _trace(prefixes: list[str], img_path: str, domain: str) -> dict:
 def build_sequences(domain: str, seed: int = 42):
     random.seed(seed)
     src = DEDUPED / f"{domain}_clip"
-    if not src.exists():
+    if not src.exists() or not any(src.glob("*.json")):
         src = DEDUPED / domain
     img_dir = RENDERED / domain
     out_dir = SEQUENCES / domain

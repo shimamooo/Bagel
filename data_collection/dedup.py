@@ -35,7 +35,6 @@ def clip_dedup(domain: str, radius: float = 0.05, batch: int = 256):
     import torch
     import numpy as np
     from PIL import Image
-    from transformers import CLIPProcessor, CLIPModel
 
     src = DEDUPED / domain
     img_dir = RENDERED / domain
@@ -43,8 +42,10 @@ def clip_dedup(domain: str, radius: float = 0.05, batch: int = 256):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
+    model = CLIPVisionModelWithProjection.from_pretrained(
+        "openai/clip-vit-base-patch32").to(device)
+    proc = CLIPImageProcessor.from_pretrained("openai/clip-vit-base-patch32")
     model.eval()
 
     files = [jf for jf in sorted(src.glob("*.json"))
@@ -65,7 +66,7 @@ def clip_dedup(domain: str, radius: float = 0.05, batch: int = 256):
             continue
         with torch.no_grad():
             inp = proc(images=imgs, return_tensors="pt").to(device)
-            feats = model.get_image_features(**inp)
+            feats = model(**inp).image_embeds
             feats = feats / feats.norm(dim=-1, keepdim=True)
         uids.extend(valid)
         chunks.append(feats.cpu().float().numpy())

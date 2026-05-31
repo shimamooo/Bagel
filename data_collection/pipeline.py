@@ -1,11 +1,12 @@
 # pipeline.py -- CLI
-import argparse, sys
+import argparse
 
 DOMAINS = ["tikz", "svg", "matplotlib", "manim"]
 
 def run_collect(args):
     from collect import (collect_datikzv2, collect_arxiv_tikz,
-                         collect_svg_stack, collect_wikimedia_svg,
+                         collect_svg_stack, collect_svg_stack_hf,
+                         collect_wikimedia_svg,
                          collect_stackoverflow_matplotlib, collect_manim_github)
     if args.domain in ("tikz", "all"):
         print("collecting DaTikZv2.")
@@ -14,17 +15,19 @@ def run_collect(args):
             print("collecting arXiv TikZ")
             collect_arxiv_tikz(max_papers=args.arxiv_papers)
     if args.domain in ("svg", "all"):
+        print("collecting SVG-Stack (HuggingFace).")
+        collect_svg_stack_hf(limit=args.limit)
         if args.svg_jsonl:
-            print("collecting SVG-Stack")
+            print("collecting SVG-Stack (local JSONL).")
             collect_svg_stack(args.svg_jsonl)
-        print("collecting Wikimedia SVG.")
-        collect_wikimedia_svg(max_items=args.wikimedia_max)
+        if args.wikimedia_max > 0:
+            print("collecting Wikimedia SVG.")
+            collect_wikimedia_svg(max_items=args.wikimedia_max)
     if args.domain in ("matplotlib", "all"):
         if not args.so_key:
-            print("--so-key required for matplotlib", file=sys.stderr)
-        else:
-            print("collecting Stack Overflow matplotlib.")
-            collect_stackoverflow_matplotlib(args.so_key)
+            print("no --so-key, collecting matplotlib without auth (rate-limited)")
+        print("collecting Stack Overflow matplotlib.")
+        collect_stackoverflow_matplotlib(args.so_key or "")
     if args.domain in ("manim", "all"):
         if not args.gh_token:
             print("gh token")
@@ -46,7 +49,8 @@ def run_dedup(args):
     for d in domains:
         print(f"dedup {d}")
         ast_dedup(d)
-        clip_dedup(d, radius=args.clip_radius)
+        if not args.skip_clip:
+            clip_dedup(d, radius=args.clip_radius)
 
 def run_sequences(args):
     from sequences import build_sequences
@@ -68,6 +72,8 @@ def main():
     p.add_argument("--so-key", default=None, help="Stack Overflow API key")
     p.add_argument("--gh-token", default=None, help="GitHub token")
     p.add_argument("--clip-radius", type=float, default=0.05)
+    p.add_argument("--skip-clip", action="store_true",
+                   help="skip CLIP embedding dedup (use on CPU)")
     args = p.parse_args()
 
     if args.stage == "all":
